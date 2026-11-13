@@ -1,0 +1,268 @@
+// This is your Prisma schema file,
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ─── Enums ────────────────────────────────────────────────────────────────────
+
+enum UserStatus {
+  ACTIVE
+  SUSPENDED
+  DELETED
+}
+
+enum TransactionStatus {
+  INITIATED
+  PROCESSING
+  PENDING
+  SUCCESS
+  FAILED
+  REVERSED
+}
+
+enum LedgerEntryType {
+  CREDIT
+  DEBIT
+}
+
+enum SimulationScenario {
+  SUCCESS
+  FAILURE
+  PENDING
+  TIMEOUT
+  DELAYED_SUCCESS
+}
+
+enum NotificationType {
+  PAYMENT_SENT
+  PAYMENT_RECEIVED
+  PAYMENT_FAILED
+  PAYMENT_REVERSED
+  PAYMENT_PENDING
+  SYSTEM
+}
+
+enum QrCodeType {
+  STATIC
+  DYNAMIC
+}
+
+// ─── Models ───────────────────────────────────────────────────────────────────
+
+model User {
+  id                 String      @id @default(uuid())
+  email              String      @unique
+  username           String      @unique
+  displayName        String
+  phone              String?     @unique
+  passwordHash       String
+  transactionPinHash String?
+  pinAttempts        Int         @default(0)
+  pinLockedUntil     DateTime?
+  virtualPaymentId   String      @unique // e.g. "john@payflow"
+  status             UserStatus  @default(ACTIVE)
+  avatarUrl          String?
+  createdAt          DateTime    @default(now())
+  updatedAt          DateTime    @updatedAt
+
+  // Relations
+  wallet             Wallet?
+  sentPayments       Payment[]   @relation("SentPayments")
+  receivedPayments   Payment[]   @relation("ReceivedPayments")
+  refreshTokens      RefreshToken[]
+  notifications      Notification[]
+  favourites         FavouriteRecipient[] @relation("UserFavourites")
+  favouritedBy       FavouriteRecipient[] @relation("RecipientFavourites")
+  ledgerEntries      LedgerEntry[]
+  qrCodes            QrCode[]
+  idempotencyKeys    IdempotencyRecord[]
+  reversalsInitiated PaymentReversal[]
+
+  @@index([email])
+  @@index([username])
+  @@index([virtualPaymentId])
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  userId    String
+  tokenHash String   @unique // SHA-256 of the actual token
+  expiresAt DateTime
+  revoked   Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([tokenHash])
+}
+
+model Wallet {
+  id           String   @id @default(uuid())
+  userId       String   @unique
+  balance      BigInt   @default(0) // stored in paise (1 INR = 100 paise)
+  currency     String   @default("INR")
+  dailyLimit   BigInt   @default(10000000) // ₹1,00,000 in paise
+  monthlyLimit BigInt   @default(100000000) // ₹10,00,000 in paise
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  user         User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+  ledgerEntries LedgerEntry[]
+
+  @@index([userId])
+}
+
+model Payment {
+  id                 String             @id @default(uuid())
+  referenceNumber    String             @unique
+  senderId           String
+  recipientId        String
+  amountPaise        BigInt
+  description        String?
+  status             TransactionStatus  @default(INITIATED)
+  simulationScenario SimulationScenario @default(SUCCESS)
+  failureReason      String?
+  processedAt        DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  sender       User             @relation("SentPayments", fields: [senderId], references: [id])
+  recipient    User             @relation("ReceivedPayments", fields: [recipientId], references: [id])
+  transactions Transaction[]
+  reversal     PaymentReversal?
+  receipt      Receipt?
+
+  @@index([senderId])
+  @@index([recipientId])
+  @@index([status])
+  @@index([createdAt])
+}
+
+model IdempotencyRecord {
+  id              String   @id @default(uuid())
+  idempotencyKey  String   @unique
+  userId          String
+  paymentId       String?
+  responseBody    Json?
+  statusCode      Int
+  createdAt       DateTime @default(now())
+  expiresAt       DateTime
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([idempotencyKey])
+  @@index([userId])
+}
+
+model Transaction {
+  id        String            @id @default(uuid())
+  paymentId String
+  status    TransactionStatus
+  metadata  Json?
+  createdAt DateTime          @default(now())
+
+  payment      Payment       @relation(fields: [paymentId], references: [id])
+  ledgerEntries LedgerEntry[]
+
+  @@index([paymentId])
+  @@index([status])
+}
+
+model LedgerEntry {
+  id            String          @id @default(uuid())
+  transactionId String
+  userId        String
+  walletId      String
+  type          LedgerEntryType
+  amountPaise   BigInt
+  balanceBefore BigInt
+  balanceAfter  BigInt
+  description   String
+  createdAt     DateTime        @default(now())
+
+  transaction Transaction @relation(fields: [transactionId], references: [id])
+  user        User        @relation(fields: [userId], references: [id])
+  wallet      Wallet      @relation(fields: [walletId], references: [id])
+
+  @@index([transactionId])
+  @@index([userId])
+  @@index([walletId])
+  @@index([createdAt])
+}
+
+model PaymentReversal {
+  id                String   @id @default(uuid())
+  paymentId         String   @unique
+  initiatedBy       String
+  reason            String?
+  reversalRefNumber String   @unique
+  createdAt         DateTime @default(now())
+
+  payment   Payment @relation(fields: [paymentId], references: [id])
+  initiator User    @relation(fields: [initiatedBy], references: [id])
+
+  @@index([paymentId])
+}
+
+model FavouriteRecipient {
+  id          String   @id @default(uuid())
+  userId      String
+  recipientId String
+  createdAt   DateTime @default(now())
+
+  user      User @relation("UserFavourites", fields: [userId], references: [id], onDelete: Cascade)
+  recipient User @relation("RecipientFavourites", fields: [recipientId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, recipientId])
+  @@index([userId])
+}
+
+model QrCode {
+  id          String     @id @default(uuid())
+  userId      String
+  type        QrCodeType @default(STATIC)
+  payload     String     // The UPI-style string
+  amountPaise BigInt?    // For dynamic QR only
+  description String?
+  expiresAt   DateTime?
+  isActive    Boolean    @default(true)
+  createdAt   DateTime   @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model Receipt {
+  id         String   @id @default(uuid())
+  paymentId  String   @unique
+  data       Json     // Full receipt snapshot
+  createdAt  DateTime @default(now())
+
+  payment Payment @relation(fields: [paymentId], references: [id])
+}
+
+model Notification {
+  id        String           @id @default(uuid())
+  userId    String
+  type      NotificationType
+  title     String
+  body      String
+  data      Json?
+  isRead    Boolean          @default(false)
+  createdAt DateTime         @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([isRead])
+  @@index([createdAt])
+}
