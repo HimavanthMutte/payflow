@@ -51,3 +51,4 @@ describe('Wallet & Recipient Unit Tests', () => {
     });
   });
 });
+

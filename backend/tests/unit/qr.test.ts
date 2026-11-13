@@ -90,3 +90,4 @@ describe('QR Module Unit Tests', () => {
     });
   });
 });
+
