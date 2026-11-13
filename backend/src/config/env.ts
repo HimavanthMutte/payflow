@@ -1,4 +1,12 @@
 /* eslint-disable no-console */
+import dotenv from 'dotenv';
+import path from 'path';
+
+// Load .env from current directory or parent directory
+dotenv.config();
+dotenv.config({ path: path.resolve(__dirname, '../../.env') });
+dotenv.config({ path: path.resolve(__dirname, '../../../.env') });
+
 import { z } from 'zod';
 
 const envSchema = z.object({
